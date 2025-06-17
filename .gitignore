@@ -1,0 +1,56 @@
+# Ignore all .env files (root and subdirectories)
+.env
+.env.*
+*.env
+
+# Python bytecode and cache
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+venv/
+.venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+
+# Distribution / packaging
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# Logs and test reports
+*.log
+*.cover
+.coverage
+coverage.xml
+htmlcov/
+.tox/
+.pytest_cache/
+.cache/
+
+# mypy & Pylint
+.mypy_cache/
+.dmypy.json
+.pylint.d/
+
+# IDE/editor folders
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+
+# macOS system files
+.DS_Store
+
+# Jupyter notebooks
+.ipynb_checkpoints/
+
+# Local config or secrets
+config/settings_local.py
+secrets.yml
+secret.*
+credentials.*
