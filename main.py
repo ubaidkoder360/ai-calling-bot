@@ -1,60 +1,84 @@
-from fastapi import FastAPI, Request, UploadFile, Form
-from fastapi.responses import PlainTextResponse
-from twilio.twiml.voice_response import VoiceResponse, Gather, Dial
+from fastapi import FastAPI, Request, UploadFile
+from twilio.twiml.voice_response import VoiceResponse, Gather
 from twilio.rest import Client
 from dotenv import load_dotenv
-import openai, os, csv, io
+from openai import OpenAI
+import os, csv, io
+from fastapi.responses import Response
 
 load_dotenv()
 
 app = FastAPI()
 
-openai.api_key = os.getenv("OPENAI_API_KEY")
+# Load environment variables
+openai_client = OpenAI()  # Automatically loads from OPENAI_API_KEY env var
 twilio_sid = os.getenv("TWILIO_ACCOUNT_SID")
 twilio_token = os.getenv("TWILIO_AUTH_TOKEN")
 twilio_number = os.getenv("TWILIO_PHONE_NUMBER")
-twilio_webhook = os.getenv("TWILIO_WEBHOOK_URL")
+twilio_webhook = os.getenv("VOICE_WEBHOOK_URL")
 ai_greeting = os.getenv("AI_GREETING", "Hi! How can I help you?")
 agent_number = os.getenv("AGENT_PHONE_NUMBER")
 
 twilio_client = Client(twilio_sid, twilio_token)
-greeting_mode = {}
+greeted_callers = set()
 
-
-@app.post("/voice", response_class=PlainTextResponse)
+@app.api_route("/voice", methods=["POST", "GET"])
 async def voice_response(request: Request):
     form = await request.form()
     from_number = form.get("From")
-    speech_result = form.get("SpeechResult", "")
+    speech_result = form.get("SpeechResult")
+
+    print("------ Incoming Twilio POST ------")
+    for key, value in form.items():
+        print(f"{key}: {value}")
 
     response = VoiceResponse()
 
-    if from_number not in greeting_mode:
-        greeting_mode[from_number] = True
-        gather = Gather(input="speech", action="/voice", timeout=3, speechTimeout="auto")
+    if from_number not in greeted_callers:
+        greeted_callers.add(from_number)
+
+        gather = Gather(
+            input="speech",
+            timeout=5,
+            speechTimeout="auto",
+            action=twilio_webhook,
+            method="POST"
+        )
+        gather.pause(length=1)  # Prevent speech cutoff
         gather.say(ai_greeting, voice="alice")
         response.append(gather)
-        return str(response)
+        response.redirect(twilio_webhook)
+        return Response(content=str(response), media_type="application/xml")
 
-    # check if user is interested
-    interested_keywords = ["yes", "interested", "sure", "okay", "yeah", "want", "go ahead"]
+    if not speech_result or not speech_result.strip():
+        response.say("Sorry, I didn't catch that. Please try again.", voice="alice")
+        response.redirect(twilio_webhook)
+        return Response(content=str(response), media_type="application/xml")
 
-    if any(word in speech_result.lower() for word in interested_keywords):
-        response.say("Great! Connecting you to a live agent now.", voice="alice")
-        response.dial(agent_number)
-        return str(response)
+    try:
+        ai_reply = openai_client.chat.completions.create(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": speech_result}]
+        )
+        reply_text = ai_reply.choices[0].message.content.strip()
+        print(f"AI replied: {reply_text}")
+    except Exception as e:
+        print(f"OpenAI error: {e}")
+        reply_text = "Sorry, I'm having trouble understanding right now."
 
-    # otherwise continue conversation with AI
-    ai_reply = openai.ChatCompletion.create(
-        model="gpt-3.5-turbo",
-        messages=[{"role": "user", "content": speech_result}]
+    gather = Gather(
+        input="speech",
+        timeout=5,
+        speechTimeout="auto",
+        action=twilio_webhook,
+        method="POST"
     )
-    reply_text = ai_reply.choices[0].message.content
-
-    gather = Gather(input="speech", action="/voice", timeout=3, speechTimeout="auto")
+    gather.pause(length=1)
     gather.say(reply_text, voice="alice")
     response.append(gather)
-    return str(response)
+    response.redirect(twilio_webhook)
+
+    return Response(content=str(response), media_type="application/xml")
 
 
 @app.post("/call-from-csv/")
