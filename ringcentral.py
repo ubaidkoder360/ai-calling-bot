@@ -4,22 +4,24 @@ from twilio.rest import Client
 from dotenv import load_dotenv
 from openai import OpenAI
 import os, csv, io
-from fastapi.responses import Response, JSONResponse
+from fastapi.responses import Response
+from fastapi.responses import JSONResponse
 
 load_dotenv()
 
 app = FastAPI()
 
-# Load config
-openai_client = OpenAI()
+# Load environment variables
+openai_client = OpenAI()  # Automatically loads from OPENAI_API_KEY env var
 twilio_sid = os.getenv("TWILIO_ACCOUNT_SID")
 twilio_token = os.getenv("TWILIO_AUTH_TOKEN")
 twilio_number = os.getenv("TWILIO_PHONE_NUMBER")
 twilio_webhook = os.getenv("VOICE_WEBHOOK_URL")
-ai_greeting = os.getenv("AI_GREETING", "Hi! this is Jason calling from Biopharma Informatic.")
-agent_number = os.getenv("AGENT_PHONE_NUMBER", "+12062037424")  # Default to provided number
+ai_greeting = os.getenv("AI_GREETING", "Hi! How can I help you?")
+agent_number = os.getenv("AGENT_PHONE_NUMBER")
 
 twilio_client = Client(twilio_sid, twilio_token)
+greeted_callers = set()
 
 @app.api_route("/voice", methods=["POST", "GET"])
 async def voice_response(request: Request):
@@ -30,88 +32,54 @@ async def voice_response(request: Request):
     print("------ Incoming Twilio POST ------")
     for key, value in form.items():
         print(f"{key}: {value}")
-    print(f"DEBUG: Caller = {from_number}")
-    print(f"DEBUG: SpeechResult = {speech_result}")
 
     response = VoiceResponse()
 
-
-    if not speech_result:
-        print("DEBUG: Sending initial greeting...")
+    if from_number not in greeted_callers:
+        greeted_callers.add(from_number)
 
         gather = Gather(
             input="speech",
-            timeout=10,
+            timeout=5,
             speechTimeout="auto",
             action=twilio_webhook,
-            method="POST",
-            barge_in=True,
-            language="en-IN" 
+            method="POST"
         )
-
-    
-        gather.say("Hi, this is Jason calling from Biopharma Informatics.", voice="alice")
-        gather.pause(length=1)
-        gather.say("How are you doing today?", voice="alice")
-        gather.pause(length=1)
-        gather.say(
-            "I'm reaching out because you recently filled out a form through one of our marketing campaigns — "
-            "and that’s why I’m giving you a quick call today.",
-            voice="alice"
-        )
-        gather.pause(length=1)
-        gather.say(
-            "I’m now going to connect you with one of our specialists who will assist you further.",
-            voice="alice"
-        )
-        gather.pause(length=1)
-        gather.say("Please stay on the line while I transfer your call.", voice="alice")
-
+        gather.pause(length=1)  # Prevent speech cutoff
+        gather.say(ai_greeting, voice="alice")
         response.append(gather)
-
-   
         response.redirect(twilio_webhook)
         return Response(content=str(response), media_type="application/xml")
 
-
-    if not speech_result.strip():
-        print("DEBUG: Empty speech received.")
-        response.say("I'm sorry, I didn't catch that. Let me try again.", voice="alice")
+    if not speech_result or not speech_result.strip():
+        response.say("Sorry, I didn't catch that. Please try again.", voice="alice")
         response.redirect(twilio_webhook)
         return Response(content=str(response), media_type="application/xml")
-
 
     try:
-        print("DEBUG: Sending to OpenAI...")
         ai_reply = openai_client.chat.completions.create(
             model="gpt-3.5-turbo",
             messages=[{"role": "user", "content": speech_result}]
         )
         reply_text = ai_reply.choices[0].message.content.strip()
-        print(f"DEBUG: OpenAI response: {reply_text}")
+        print(f"AI replied: {reply_text}")
     except Exception as e:
-        print(f"ERROR: OpenAI API error: {e}")
-        reply_text = "Sorry, I'm having some trouble. One moment please."
+        print(f"OpenAI error: {e}")
+        reply_text = "Sorry, I'm having trouble understanding right now."
 
-    response.say(reply_text, voice="alice")
-    response.pause(length=1)
-
-
-    if agent_number:
-        try:
-            response.say("Transferring you now.", voice="alice")
-            dial = response.dial(caller_id=twilio_number)
-            dial.number(agent_number)
-            print(f"DEBUG: Transferring to {agent_number}")
-        except Exception as e:
-            print(f"ERROR: Call transfer failed - {e}")
-            response.say("Sorry, I was unable to transfer your call. Please try again later.", voice="alice")
-    else:
-        print("DEBUG: Agent number missing.")
-        response.say("All our agents are currently busy. We'll call you back shortly.", voice="alice")
+    gather = Gather(
+        input="speech",
+        timeout=5,
+        speechTimeout="auto",
+        action=twilio_webhook,
+        method="POST"
+    )
+    gather.pause(length=1)
+    gather.say(reply_text, voice="alice")
+    response.append(gather)
+    response.redirect(twilio_webhook)
 
     return Response(content=str(response), media_type="application/xml")
-
 
 
 @app.post("/call-from-csv/")
